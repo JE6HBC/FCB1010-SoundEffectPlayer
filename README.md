@@ -110,6 +110,16 @@ Python 3 と pip のインストール (通常はデフォルトでインスト�
 
 `python3 fcb1010_sound_player.py`
 
+## macOS でのデプロイ方法 (補足)
+macOS では、通常、追加のシステムライブラリのインストールは必要ありません。上記の手順で pip3 install mido pygame pyqt5 を実行するだけで、必要なライブラリがインストールされるはずです。
+
+もし、portaudio や portmidi 関連のエラーが発生する場合は、Homebrew を使ってインストールを試してみてください。
+
+`brew install portmidi`
+それでも問題が解決しない場合(pygameの初期化エラーなど)は、以下のコマンドで関連ライブラリをインストールしてみてください。
+
+`brew install sdl sdl_image sdl_mixer sdl_ttf portmidi`
+
 ##トラブルシューティング
 MIDI デバイスが認識されない:
 
