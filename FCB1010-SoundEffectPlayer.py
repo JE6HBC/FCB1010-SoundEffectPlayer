@@ -116,7 +116,7 @@ def set_volume(val):
         if channel:
             channel.set_volume(volume)
 
-# --- MIDIメッセージ処理 ---
+# --- MIDI/キーボード入力処理 ---
 def process_midi_message():
     """MIDIメッセージを処理するスレッド"""
     global midi_input_level, current_playing, audio_output_level, queued_sounds
@@ -130,42 +130,58 @@ def process_midi_message():
 
             if msg.control >= 1 and msg.control <= 10:  # スイッチ1-10
                 switch_number = msg.control
-                folder_path = str(switch_number)
-
-                if os.path.isdir(folder_path):
-                    files = [f for f in os.listdir(folder_path) if f.endswith(('.wav', '.mp3', '.ogg'))]
-                    if files:
-                        if msg.value > 0:  # スイッチが押された
-                            filename = random.choice(files)
-                            with lock:
-                                # 既に再生中の場合はキューに追加
-                                if switch_number in current_playing:
-                                    queued_sounds[switch_number] = filename
-                                else:
-                                    # 再生でなければ即座に再生
-                                    full_path = os.path.join(folder_path, filename)
-                                    sound, channel = play_sound(full_path, switch_number -1) # チャンネル番号0-9を割り当て
-                                    if sound:
-                                        current_playing[switch_number] = (filename, channel)
-                        else: # スイッチが離された
-                            with lock:
-                                if switch_number in current_playing:
-                                     # スイッチを離したときにキューに何かあれば、再生を予約
-                                    if switch_number in queued_sounds:
-                                        del queued_sounds[switch_number] #キューを削除
-                                else:
-                                    if switch_number in current_playing:
-                                        _, channel = current_playing[switch_number]
-                                        if channel: # 即座に停止せず、再生終了を待つ
-                                            channel.fadeout(500) #フェードアウト
-                                            #stop_sound(channel)
+                process_input(switch_number, msg.value) # MIDIとキーボードで共通の処理
 
             elif msg.control == 7:  # エクスプレッションペダル (CC#7)
                 set_volume(msg.value / 127.0)
 
+def process_keyboard_input(key_event):
+    """キーボード入力を処理"""
+    if key_event.type == pygame.KEYDOWN:
+        if key_event.unicode.isdigit():
+            switch_number = int(key_event.unicode)
+            if 1 <= switch_number <= 10:
+                process_input(switch_number, 127) # キー押下をvalue=127として扱う
+    elif key_event.type == pygame.KEYUP:
+         if key_event.unicode.isdigit():
+            switch_number = int(key_event.unicode)
+            if 1 <= switch_number <= 10:
+                process_input(switch_number, 0) # キー押下をvalue=0として扱う
+
+def process_input(switch_number, value):
+    """MIDI/キーボード入力共通の処理"""
+    folder_path = str(switch_number)
+
+    if os.path.isdir(folder_path):
+        files = [f for f in os.listdir(folder_path) if f.endswith(('.wav', '.mp3', '.ogg'))]
+        if files:
+            if value > 0:  # スイッチ/キーが押された
+                filename = random.choice(files)
+                with lock:
+                    # 既に再生中の場合はキューに追加
+                    if switch_number in current_playing:
+                        queued_sounds[switch_number] = filename
+                    else:
+                        # 再生中でなければ即座に再生
+                        full_path = os.path.join(folder_path, filename)
+                        sound, channel = play_sound(full_path, switch_number - 1)
+                        if sound:
+                            current_playing[switch_number] = (filename, channel)
+            else:  # スイッチ/キーが離された
+                with lock:
+                    if switch_number in current_playing:
+                        # キューに何かあれば、再生を予約
+                        if switch_number in queued_sounds:
+                            del queued_sounds[switch_number]
+                    else:
+                        if switch_number in current_playing:
+                            _, channel = current_playing[switch_number]
+                            if channel:
+                                channel.fadeout(500)
+
 # --- Pygameイベント処理 ---
 def process_pygame_events():
-    """Pygameのイベント(特に音声再生終了イベント)を処理する"""
+    """Pygameのイベント(音声再生終了、キーボード入力)を処理する"""
     global current_playing, queued_sounds
 
     for event in pygame.event.get():
@@ -185,6 +201,10 @@ def process_pygame_events():
                     sound, channel = play_sound(full_path, channel_num)
                     if sound:
                         current_playing[switch_number] = (filename, channel)
+
+        # キーボード入力イベントの処理
+        elif event.type == pygame.KEYDOWN or event.type == pygame.KEYUP:
+            process_keyboard_input(event)
 
 # --- GUI関連のクラス ---
 
@@ -219,7 +239,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.layout.addWidget(self.file_list_label)
         self.file_list_widget = QtWidgets.QListWidget()
         self.layout.addWidget(self.file_list_widget)
-        self.file_list_widget.setMinimumHeight(200) # ファイルリストの最低限の高
+        self.file_list_widget.setMinimumHeight(200) # ファイルリストの最低限の高さ
 
         # --- MIDI入力レベル表示 ---
         self.midi_level_label = QtWidgets.QLabel("MIDI Input Level:")
@@ -321,4 +341,3 @@ if __name__ == "__main__":
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
-    
