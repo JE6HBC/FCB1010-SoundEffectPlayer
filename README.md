@@ -51,8 +51,9 @@ Python 3.6 以上がインストールされていることを確認してくだ
 
 `pip` コマンドを使用して、必要なライブラリをインストールします。
 
-```bash
-pip install mido pygame pyqt5
+`bash`
+`pip install mido pygame pyqt5`
+
 3. スクリプトとフォルダの準備
 このリポジトリをクローンするか、fcb1010_sound_player.py ファイルをダウンロードします。
 上記「フォルダ構造」に従って、1 から 10 までのフォルダを作成し、各フォルダに音声ファイルを配置します。
@@ -63,9 +64,9 @@ FCB1010 を PC に接続します。
 
 以下のコマンドでスクリプトを実行します。
 
-Bash
+`Bash`
 
-python fcb1010_sound_player.py
+`python fcb1010_sound_player.py`
 GUIウィンドウが表示されます。
 
 "MIDI Input Device" ドロップダウンリストから、FCB1010 を選択します。
@@ -83,40 +84,33 @@ FCB1010 の左側のエクスプレッションペダルで、出力ボリュー
 
 MIDI Input LevelおよびAudio Output Levelでそれぞれのレベルが確認できます。
 
-Ubuntu でのデプロイ方法
+## Ubuntu でのデプロイ方法
 Ubuntu (およびその他のDebianベースのディストリビューション) では、以下の手順でセットアップできます。
 
 Python 3 と pip のインストール (通常はデフォルトでインストールされています):
 
-Bash
-
-sudo apt update
-sudo apt install python3 python3-pip
+`sudo apt update`
+`sudo apt install python3 python3-pip`
 必要なライブラリのインストール:
 
-Bash
-
-pip3 install mido pygame pyqt5
+`pip3 install mido pygame pyqt5`
 場合によっては、pygame のインストールに追加のシステムライブラリが必要になることがあります。
 
-     sudo apt-get install libsdl-image1.2-dev libsdl-mixer1.2-dev libsdl-ttf2.0-dev libsdl1.2-dev libsmpeg-dev python-nu 1 mpy
-```
+`sudo apt-get install libsdl-image1.2-dev libsdl-mixer1.2-dev libsdl-ttf2.0-dev libsdl1.2-dev libsmpeg-dev python-nu 1 mpy`
+     
 3. portmidi(midoのバックエンドで使用)をインストール   
 1.
-github.com
-github.com
+`github.com`
+`github.com`
 
-Bash
-
- sudo apt-get install portmidi
+`sudo apt-get install portmidi`
 スクリプトとフォルダの準備 (上記「スクリプトとフォルダの準備」と同じ).
 
 スクリプトの実行:
 
-Bash
+`python3 fcb1010_sound_player.py`
 
-python3 fcb1010_sound_player.py
-トラブルシューティング
+##トラブルシューティング
 MIDI デバイスが認識されない:
 
 FCB1010 が正しく接続されていることを確認してください。
@@ -136,7 +130,7 @@ Python のバージョンが 3.6 以上であることを確認してくださ�
 ライセンス
 このスクリプトは MIT ライセンスの下で公開されています。詳細については、LICENSE ファイル (もしあれば) を参照してください。
 
-謝辞
+## 謝辞
 mido: MIDIライブラリ
 pygame: オーディオ再生
 PyQt: GUIフレームワーク
