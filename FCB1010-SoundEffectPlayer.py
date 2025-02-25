@@ -51,23 +51,28 @@ def close_midi_input():
 
 def get_audio_outputs():
     """利用可能なオーディオ出力デバイスのリストを取得"""
-    pygame.init()
-    mixer.init()
-    num_devices = mixer.get_num_channels() # get_num_channels() でデバイス数を取得できる
+    pygame.init()  # pygame全体の初期化
     device_names = []
 
-    # get_num_channels() は実際のデバイス数より大きい値を返すことがあるので、
-    # 実際に初期化を試みてエラーが出ないデバイスのみをリストに追加する
+    try:
+        num_devices = pygame.mixer.get_num_channels()
+    except pygame.error:
+        print("Error: Pygame mixer could not be initialized. Audio output may not work.")
+        return []
+
     for i in range(num_devices):
         try:
-            mixer.init(44100, -16, 2, 512, devicename=str(i))  # 初期化を試みる
-            mixer.quit() # エラーが出なければ、一旦閉じる
-            device_names.append(pygame.mixer.get_init()[0]) # init() はタプルで返すので[0]でサンプリング周波数を返す
+            # 各デバイスに対してmixerを初期化を試みる
+            pygame.mixer.init(44100, -16, 2, 512, devicename=str(i))
+            device_names.append(str(i))  # デバイス番号を文字列として追加
+            pygame.mixer.quit()  # 一度閉じる
         except pygame.error:
+            # 初期化に失敗しても処理を続ける
             pass
-    
-    pygame.init() # 再初期化
-    mixer.init() # 再初期化
+
+    # main loopでの利用のため、再度初期化
+    pygame.mixer.init()
+
     return device_names
 
 
@@ -76,7 +81,7 @@ def init_audio(device_index=None):
     global audio_output_device
     pygame.init()
 
-    if device_index is not None and device_index < pygame.mixer.get_num_channels():
+    if device_index is not None:
         try:
            mixer.init(44100,-16, 2, 512, devicename=str(device_index)) # 44100Hz, 16bit, stereo, buffer=512 samples, 指定のデバイス
         except pygame.error as message:
@@ -146,7 +151,7 @@ def process_keyboard_input(key_event):
          if key_event.unicode.isdigit():
             switch_number = int(key_event.unicode)
             if 1 <= switch_number <= 10:
-                process_input(switch_number, 0) # キー押下をvalue=0として扱う
+                process_input(switch_number, 0) # ー押下をvalue=0として扱う
 
 def process_input(switch_number, value):
     """MIDI/キーボード入力共通の処理"""
@@ -230,7 +235,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.audio_output_label = QtWidgets.QLabel("Audio Output Device:")
         self.layout.addWidget(self.audio_output_label)
         self.audio_output_combo = QtWidgets.QComboBox()
-        self.audio_output_combo.addItems(get_audio_outputs())
+        self.audio_output_combo.addItems(get_audio_outputs())  # ここで文字列のリストが渡される
         self.audio_output_combo.currentIndexChanged.connect(self.select_audio_output)
         self.layout.addWidget(self.audio_output_combo)
 
@@ -284,10 +289,25 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def select_audio_output(self, index):
         """オーディオ出力デバイスが選択されたときの処理"""
-        global selected_audio_output_index
+        global selected_audio_output_index, audio_output_device
         selected_audio_output_index = index
-        init_audio(index)
-        print(f"Selected audio output: {audio_output_device}")
+
+        # 利用可能なオーディオ出力デバイスのリストを取得 (get_audio_outputs()を再呼び出し)
+        available_devices = get_audio_outputs()
+        if not available_devices:  # デバイスが1つも見つからない場合
+            QtWidgets.QMessageBox.warning(self, "Error", "No audio output devices found.")
+            return
+
+        if index < len(available_devices):  # 選択されたインデックスが有効範囲内なら
+            try:
+                #選択されたデバイスで初期化
+                init_audio(int(available_devices[index]))  # 文字列を整数に変換
+                print(f"Selected audio output: Device {available_devices[index]}") # 選択されたデバイス番号を表示
+            except pygame.error as message:
+                QtWidgets.QMessageBox.warning(self, "Error", f"Cannot initialize audio device: {message}")
+        else:  # indexが範囲外の場合(通常は起こらないはず)
+            QtWidgets.QMessageBox.warning(self, "Error", "Invalid audio output device selected.")
+            init_audio()  # デフォルトデバイスで初期化を試みる
 
 
     def update_file_list(self):
@@ -323,7 +343,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # MIDI入力レベルを更新
         self.midi_level_bar.setValue(int(midi_input_level * 100))
 
-        # オーディオ出力レベルを更新 (アクティブなチャンネル数で代用)
+        # オーディオ出力レベルを更新 (アクティブなャンネル数で代用)
         num_busy_channels = pygame.mixer.get_busy()
         self.audio_level_bar.setValue(int((num_busy_channels / 10) * 100)) # 10個のチャンネルを前提に正規化
 
