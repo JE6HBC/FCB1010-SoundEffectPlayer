@@ -10,7 +10,6 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 # --- 定数 ---
 REFRESH_RATE = 30  # 画面更新頻度(Hz)
-# VOLUME_CHANGE_STEP = 0.05  # ボリューム変更の刻み幅 (スライダーで細かく制御するため不要)
 DEFAULT_VOLUME = 1.0 # デフォルトの音量 (最大)
 
 # --- グローバル変数 ---
@@ -18,7 +17,7 @@ midi_in = None
 audio_output_device = None
 selected_midi_input_index = -1
 selected_audio_output_index = -1
-current_playing = {}  # {switch_number: (filename, channel)}
+current_playing = {}  # {switch_number: (filename, channel, sound)}  # soundオブジェクトも保持
 queued_sounds = {} # {switch_number: filename}  # 再生待ちのサウンド
 volume = DEFAULT_VOLUME
 midi_input_level = 0
@@ -94,7 +93,7 @@ def init_audio(device_index=None):
     audio_output_device = pygame.mixer.get_init()[0]
 
 def play_sound(filename, channel_num):
-    """指定されたチャンネルでサウンドを生"""
+    """指定されたチャンネルでサウンドを再生"""
     try:
         sound = mixer.Sound(filename)
         channel = mixer.Channel(channel_num)
@@ -102,7 +101,7 @@ def play_sound(filename, channel_num):
         channel.set_volume(volume)
 
         # 再生終了コールバックを設定
-        channel.set_endevent(pygame.USEREVENT + channel_num) # チャンネルごとに固有のイベント
+        channel.set_endevent() # チャンネルごとに固有のイベントタイプを自動割り当て
 
         return sound, channel
     except Exception as e:
@@ -118,7 +117,7 @@ def set_volume(val):
     """全体の音量を設定"""
     global volume
     volume = max(0.0, min(1.0, val))  # 0.0から1.0の範囲に制限
-    for _, (_, channel) in current_playing.items():
+    for _, (_, channel, _) in current_playing.items(): # soundオブジェクトは使用しない
         if channel:
             channel.set_volume(volume)
 
@@ -130,8 +129,9 @@ def process_midi_message():
 
     if not midi_in:
       return
-
-    for msg in midi_in.iter_pending():
+    
+    while True: # 無限ループでMIDIメッセージを監視
+      for msg in midi_in.read(128): # バッファにあるメッセージを全て読み出す
         if msg.type == 'control_change':
             midi_input_level = msg.value / 127.0  # MIDIレベルを更新
 
@@ -142,6 +142,7 @@ def process_midi_message():
             elif msg.control == 7:  # エクスプレッションペダル (CC#7)
                 use_midi_volume = True # MIDIボリュームコントロールを有効にする
                 set_volume(msg.value / 127.0)
+      time.sleep(0.001)  # CPU負荷を下げるために少し待機
 
 
 def process_keyboard_input(key_event):
@@ -163,30 +164,27 @@ def process_input(switch_number, value):
 
     if os.path.isdir(folder_path):
         files = [f for f in os.listdir(folder_path) if f.endswith(('.wav', '.mp3', '.ogg'))]
-        if files:
+        if not files:
+            return
+
+        with lock:  # 排他制御を開始
             if value > 0:  # スイッチ/キーが押された
                 filename = random.choice(files)
-                with lock:
+                if switch_number in current_playing:
                     # 既に再生中の場合はキューに追加
-                    if switch_number in current_playing:
-                        queued_sounds[switch_number] = filename
-                    else:
-                        # 再生中でなければ即座に再生
-                        full_path = os.path.join(folder_path, filename)
-                        sound, channel = play_sound(full_path, switch_number - 1)
-                        if sound:
-                            current_playing[switch_number] = (filename, channel)
+                    queued_sounds[switch_number] = filename
+                else:
+                    # 再生中でなければ即座に再生
+                    full_path = os.path.join(folder_path, filename)
+                    sound, channel = play_sound(full_path, switch_number - 1)
+                    if sound and channel:
+                        current_playing[switch_number] = (filename, channel, sound) #soundも保持
             else:  # スイッチ/キーが離された
-                with lock:
-                    if switch_number in current_playing:
-                        # キューに何かあれば、再生を予約
-                        if switch_number in queued_sounds:
-                            del queued_sounds[switch_number]
-                    else:
-                        if switch_number in current_playing:
-                            _, channel = current_playing[switch_number]
-                            if channel:
-                                channel.fadeout(500)
+                if switch_number in current_playing:
+                    _, channel, _ = current_playing[switch_number] # soundオブジェクトは使用しない
+                    if channel:
+                         channel.fadeout(500)
+                    # キューには追加/削除しない（再生終了時に処理）
 
 # --- Pygameイベント処理 ---
 def process_pygame_events():
@@ -194,22 +192,31 @@ def process_pygame_events():
     global current_playing, queued_sounds
 
     for event in pygame.event.get():
-        if event.type >= pygame.USEREVENT and event.type < pygame.USEREVENT + 10:  # USEREVENTからUSEREVENT+9まで
-            channel_num = event.type - pygame.USEREVENT
-            switch_number = channel_num + 1
+        if event.type == pygame.QUIT:
+            pygame.quit()
+            sys.exit()
 
-            with lock:
-                if switch_number in current_playing:
-                  del current_playing[switch_number]  # 再生終了したエントリを削除
+        if event.type == pygame.USEREVENT: # チャンネル終了イベント
+             with lock:
+                # 終了したチャンネルを探す
+                finished_channel_number = None
+                for switch_num, (_, channel, _) in current_playing.items():
+                    if not channel.get_busy(): # 再生終了を検知
+                        finished_channel_number = switch_num
+                        break
 
-                # キューに次のサウンドがあれば再生
-                if switch_number in queued_sounds:
-                    filename = queued_sounds.pop(switch_number)
-                    folder_path = str(switch_number)
-                    full_path = os.path.join(folder_path, filename)
-                    sound, channel = play_sound(full_path, channel_num)
-                    if sound:
-                        current_playing[switch_number] = (filename, channel)
+                if finished_channel_number is not None:
+                    del current_playing[finished_channel_number]  # 再生終了したエントリを削除
+
+                    # キューに次のサウンドがあれば再生
+                    if finished_channel_number in queued_sounds:
+                        filename = queued_sounds.pop(finished_channel_number)
+                        folder_path = str(finished_channel_number)
+                        full_path = os.path.join(folder_path, filename)
+                        sound, channel = play_sound(full_path, finished_channel_number - 1)
+                        if sound and channel:
+                            current_playing[finished_channel_number] = (filename, channel, sound)
+
 
         # キーボード入力イベントの処理
         elif event.type == pygame.KEYDOWN or event.type == pygame.KEYUP:
@@ -292,7 +299,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def slider_volume_changed(self, value):
         """スライダーの値が変更されたときの処理"""
         global use_midi_volume
-        if not use_midi_volume: # MIDIコントロールが無効な場合のみ
+        if not use_midi_volume: # MIDIコントロルが無効な場合のみ
             set_volume(value / 100.0)
 
     def select_midi_input(self, index):
@@ -346,7 +353,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def update_gui(self):
         """GUIを更新"""
         global use_midi_volume  # use_midi_volume がグローバル変数であることを宣言
-        
+
         # Pygameのイベント処理
         process_pygame_events()
 
@@ -382,6 +389,7 @@ class MainWindow(QtWidgets.QMainWindow):
         else: # MIDIコントロールが有効なときは、use_midi_volumeをFalseにしてスライダーと同期
             use_midi_volume = False
 
+
     def closeEvent(self, event):
         """ウィンドウが閉じられたときの処理"""
         close_midi_input()
@@ -395,4 +403,3 @@ if __name__ == "__main__":
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
-B
