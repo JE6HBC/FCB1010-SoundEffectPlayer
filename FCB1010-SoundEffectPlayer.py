@@ -10,8 +10,8 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 # --- 定数 ---
 REFRESH_RATE = 30  # 画面更新頻度(Hz)
-VOLUME_CHANGE_STEP = 0.05  # ボリューム変更の刻み幅
-DEFAULT_VOLUME = 0.7 # デフォルトの音量
+# VOLUME_CHANGE_STEP = 0.05  # ボリューム変更の刻み幅 (スライダーで細かく制御するため不要)
+DEFAULT_VOLUME = 1.0 # デフォルトの音量 (最大)
 
 # --- グローバル変数 ---
 midi_in = None
@@ -24,6 +24,7 @@ volume = DEFAULT_VOLUME
 midi_input_level = 0
 audio_output_level = 0
 lock = threading.Lock()  # スレッド間の排他制御用
+use_midi_volume = True # MIDIコントロールを優先するかどうか
 
 # --- MIDI関連の関数 ---
 
@@ -93,7 +94,7 @@ def init_audio(device_index=None):
     audio_output_device = pygame.mixer.get_init()[0]
 
 def play_sound(filename, channel_num):
-    """指定されたチャンネルでサウンドを再生"""
+    """指定されたチャンネルでサウンドを生"""
     try:
         sound = mixer.Sound(filename)
         channel = mixer.Channel(channel_num)
@@ -125,6 +126,7 @@ def set_volume(val):
 def process_midi_message():
     """MIDIメッセージを処理するスレッド"""
     global midi_input_level, current_playing, audio_output_level, queued_sounds
+    global use_midi_volume, volume
 
     if not midi_in:
       return
@@ -138,7 +140,9 @@ def process_midi_message():
                 process_input(switch_number, msg.value) # MIDIとキーボードで共通の処理
 
             elif msg.control == 7:  # エクスプレッションペダル (CC#7)
+                use_midi_volume = True # MIDIボリュームコントロールを有効にする
                 set_volume(msg.value / 127.0)
+
 
 def process_keyboard_input(key_event):
     """キーボード入力を処理"""
@@ -151,7 +155,7 @@ def process_keyboard_input(key_event):
          if key_event.unicode.isdigit():
             switch_number = int(key_event.unicode)
             if 1 <= switch_number <= 10:
-                process_input(switch_number, 0) # ー押下をvalue=0として扱う
+                process_input(switch_number, 0) # キー押下をvalue=0として扱う
 
 def process_input(switch_number, value):
     """MIDI/キーボード入力共通の処理"""
@@ -235,9 +239,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.audio_output_label = QtWidgets.QLabel("Audio Output Device:")
         self.layout.addWidget(self.audio_output_label)
         self.audio_output_combo = QtWidgets.QComboBox()
-        self.audio_output_combo.addItems(get_audio_outputs())  # ここで文字列のリストが渡される
+        self.audio_output_combo.addItems(get_audio_outputs())
         self.audio_output_combo.currentIndexChanged.connect(self.select_audio_output)
         self.layout.addWidget(self.audio_output_combo)
+
+
+        # --- ボリュームコントロール ---
+        self.volume_label = QtWidgets.QLabel("Volume:")
+        self.layout.addWidget(self.volume_label)
+        self.volume_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.volume_slider.setRange(0, 100)  # 0-100の範囲
+        self.volume_slider.setValue(int(DEFAULT_VOLUME * 100))  # 初期値を設定
+        self.volume_slider.valueChanged.connect(self.slider_volume_changed)
+        self.layout.addWidget(self.volume_slider)
+
 
         # --- ファイルリスト ---
         self.file_list_label = QtWidgets.QLabel("Files:")
@@ -274,17 +289,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.midi_thread = threading.Thread(target=process_midi_message, daemon=True)
         self.midi_thread.start()
 
+    def slider_volume_changed(self, value):
+        """スライダーの値が変更されたときの処理"""
+        global use_midi_volume
+        if not use_midi_volume: # MIDIコントロールが無効な場合のみ
+            set_volume(value / 100.0)
 
     def select_midi_input(self, index):
         """MIDI入力デバイスが選択されたときの処理"""
-        global selected_midi_input_index
+        global selected_midi_input_index, use_midi_volume
         if selected_midi_input_index != index:
           close_midi_input()
           if open_midi_input(get_midi_inputs()[index]):
              selected_midi_input_index = index
              print(f"Selected MIDI input: {get_midi_inputs()[index]}")
+             use_midi_volume = True # MIDI入力を開いたらMIDIボリュームを有効化
           else:
               QtWidgets.QMessageBox.warning(self, "Error", "Failed to open selected MIDI input.")
+              use_midi_volume = False # MIDI入力が失敗したらMIDIボリュームを無効化
 
 
     def select_audio_output(self, index):
@@ -323,30 +345,42 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def update_gui(self):
         """GUIを更新"""
-
+        global use_midi_volume  # use_midi_volume がグローバル変数であることを宣言
+        
         # Pygameのイベント処理
         process_pygame_events()
 
-        # ファイルの再生状況を更新
+        # ファイルの再生状況を更新(文字色を反転)
         with lock:
             for i in range(self.file_list_widget.count()):
                 item = self.file_list_widget.item(i)
                 folder_num = int(item.text().split(':')[0])
                 if folder_num in current_playing:
                     if current_playing[folder_num][0] == item.text().split(': ')[1]:
-                      item.setBackground(QtGui.QColor(0, 255, 0))  # 緑色の背景
+                        item.setBackground(QtGui.QColor(0, 255, 0))  # 緑色の背景
+                        # 反転色を取得
+                        inverted_color = item.background().color().rgb() ^ 0xFFFFFF
+                        item.setForeground(QtGui.QColor(inverted_color))
+
                     else:
                         item.setBackground(QtGui.QColor(255, 255, 255))  # 白色の背景
+                        item.setForeground(QtGui.QColor(0, 0, 0)) # 黒色の文字
                 else:
                     item.setBackground(QtGui.QColor(255, 255, 255))  # 白色の背景
+                    item.setForeground(QtGui.QColor(0, 0, 0)) # 黒色の文字
 
         # MIDI入力レベルを更新
         self.midi_level_bar.setValue(int(midi_input_level * 100))
 
-        # オーディオ出力レベルを更新 (アクティブなャンネル数で代用)
+        # オーディオ出力レベルを更新 (アクティブなチャンネル数で代用)
         num_busy_channels = pygame.mixer.get_busy()
         self.audio_level_bar.setValue(int((num_busy_channels / 10) * 100)) # 10個のチャンネルを前提に正規化
 
+        # ボリュームスライダーの位置を更新 (MIDIコントロールが有効な場合は更新しない)
+        if not use_midi_volume:
+            self.volume_slider.setValue(int(volume * 100))
+        else: # MIDIコントロールが有効なときは、use_midi_volumeをFalseにしてスライダーと同期
+            use_midi_volume = False
 
     def closeEvent(self, event):
         """ウィンドウが閉じられたときの処理"""
@@ -361,3 +395,4 @@ if __name__ == "__main__":
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
+B
